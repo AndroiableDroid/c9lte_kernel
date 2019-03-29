@@ -1120,10 +1120,12 @@ static int msm_vfe40_start_fetch_engine(struct vfe_device *vfe_dev,
 		if (rc < 0 || !buf) {
 			pr_err("%s: No fetch buffer rc= %d buf= %p\n",
 				__func__, rc, buf);
+			mutex_unlock(&vfe_dev->buf_mgr->lock);
 			return -EINVAL;
 		}
 		mapped_info = buf->mapped_info[0];
 		buf->state = MSM_ISP_BUFFER_STATE_DISPATCHED;
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 	} else {
 		rc = vfe_dev->buf_mgr->ops->map_buf(vfe_dev->buf_mgr,
 			&mapped_info, fe_cfg->fd);
@@ -1140,6 +1142,69 @@ static int msm_vfe40_start_fetch_engine(struct vfe_device *vfe_dev,
 		dual_vfe_res->axi_data[!vfe_dev->pdev->id]->
 		src_info[VFE_PIX_0].frame_id;
 	msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x378);
+
+	msm_camera_io_w_mb(0x10000, vfe_dev->vfe_base + 0x4C);
+	msm_camera_io_w_mb(0x20000, vfe_dev->vfe_base + 0x4C);
+
+	ISP_DBG("%s:VFE%d Fetch Engine ready\n", __func__, vfe_dev->pdev->id);
+	return 0;
+}
+
+static int msm_vfe40_start_fetch_engine_multi_pass(struct vfe_device *vfe_dev,
+	void *arg)
+{
+	int rc = 0;
+	uint32_t bufq_handle = 0;
+	struct msm_isp_buffer *buf = NULL;
+	struct msm_vfe_fetch_eng_multi_pass_start *fe_cfg = arg;
+	struct msm_isp_buffer_mapped_info mapped_info;
+
+	if (vfe_dev->fetch_engine_info.is_busy == 1) {
+		pr_err("%s: fetch engine busy\n", __func__);
+		return -EINVAL;
+	}
+	memset(&mapped_info, 0, sizeof(struct msm_isp_buffer_mapped_info));
+	/* There is other option of passing buffer address from user,
+		in such case, driver needs to map the buffer and use it*/
+	vfe_dev->fetch_engine_info.session_id = fe_cfg->session_id;
+	vfe_dev->fetch_engine_info.stream_id = fe_cfg->stream_id;
+	vfe_dev->fetch_engine_info.offline_mode = fe_cfg->offline_mode;
+	vfe_dev->fetch_engine_info.fd = fe_cfg->fd;
+
+	if (!fe_cfg->offline_mode) {
+		bufq_handle = vfe_dev->buf_mgr->ops->get_bufq_handle(
+				vfe_dev->buf_mgr, fe_cfg->session_id,
+				fe_cfg->stream_id);
+		vfe_dev->fetch_engine_info.bufq_handle = bufq_handle;
+
+		mutex_lock(&vfe_dev->buf_mgr->lock);
+		rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
+			vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
+		if (rc < 0 || !buf) {
+			pr_err("%s: No fetch buffer rc= %d buf= %pK\n",
+				__func__, rc, buf);
+			mutex_unlock(&vfe_dev->buf_mgr->lock);
+			return -EINVAL;
+		}
+		mapped_info = buf->mapped_info[0];
+		buf->state = MSM_ISP_BUFFER_STATE_DISPATCHED;
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
+	} else {
+		rc = vfe_dev->buf_mgr->ops->map_buf(vfe_dev->buf_mgr,
+			&mapped_info, fe_cfg->fd);
+		if (rc < 0) {
+			pr_err("%s: can not map buffer\n", __func__);
+			return -EINVAL;
+		}
+	}
+	vfe_dev->fetch_engine_info.buf_idx = fe_cfg->buf_idx;
+	vfe_dev->fetch_engine_info.is_busy = 1;
+
+	msm_camera_io_w(mapped_info.paddr + fe_cfg->input_buf_offset,
+		vfe_dev->vfe_base + 0x228);
+
+	msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x378);
+
 	msm_camera_io_w_mb(0x10000, vfe_dev->vfe_base + 0x4C);
 	msm_camera_io_w_mb(0x20000, vfe_dev->vfe_base + 0x4C);
 

@@ -1520,7 +1520,7 @@ static int ion_sync_for_device(struct ion_client *client, int fd)
 	}
 	buffer = dmabuf->priv;
 
-	if (get_secure_vmid(buffer->flags) > 0) {
+	if ((buffer->flags & ION_FLAG_SECURE) || (get_secure_vmid(buffer->flags) > 0)) {
 		pr_err("%s: cannot sync a secure dmabuf\n", __func__);
 		dma_buf_put(dmabuf);
 		return -EINVAL;

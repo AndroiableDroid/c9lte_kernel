@@ -327,7 +327,6 @@ static void arch_counter_set_user_access(void)
 		cntkctl &= ~ARCH_TIMER_USR_VCT_ACCESS_EN;
 
 	cntkctl |= ARCH_TIMER_USR_PCT_ACCESS_EN;
-
 	arch_timer_set_cntkctl(cntkctl);
 }
 

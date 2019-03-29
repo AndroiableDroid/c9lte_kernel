@@ -431,7 +431,6 @@ do_pabt_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 
 	return do_page_fault(addr, fsr, regs);
 }
-
 #else					/* CONFIG_MMU */
 static int
 do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)

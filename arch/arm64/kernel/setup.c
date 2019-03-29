@@ -108,7 +108,7 @@ unsigned int compat_elf_hwcap2 __read_mostly;
 #endif
 
 static const char *cpu_name;
-const char *machine_name;
+static const char *machine_name;
 #ifdef CONFIG_HARDEN_BRANCH_PREDICTOR
 bool sys_psci_bp_hardening_initialised;
 #endif
@@ -256,7 +256,7 @@ void enable_psci_bp_hardening(void *data)
 				(bp_hardening_cb_t)psci_ops.get_version);
 		else
 			install_bp_hardening_cb(
-				(bp_hardening_cb_t)psci_apply_bp_hardening);		
+				(bp_hardening_cb_t)psci_apply_bp_hardening);
 	}
 }
 #endif	/* CONFIG_HARDEN_BRANCH_PREDICTOR */
