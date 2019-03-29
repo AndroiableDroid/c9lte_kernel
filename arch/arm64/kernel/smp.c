@@ -39,6 +39,7 @@
 
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
+#include <asm/cpufeature.h>
 #include <asm/cputype.h>
 #include <asm/cpu_ops.h>
 #include <asm/mmu_context.h>
@@ -50,6 +51,10 @@
 #include <asm/tlbflush.h>
 #include <asm/ptrace.h>
 #include <asm/edac.h>
+
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/qcom/sec_debug.h>
+#endif
 
 /*
  * as from 2.5, kernels no longer have an init_tasks structure
@@ -143,7 +148,7 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 	cpumask_set_cpu(cpu, mm_cpumask(mm));
 
 	set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
-	pr_debug("CPU%u: Booted secondary processor\n", cpu);
+	printk("CPU%u: Booted secondary processor\n", cpu);
 
 	/*
 	 * TTBR0 is only used for the identity mapping at this stage. Make it
@@ -157,6 +162,11 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 
 	if (cpu_ops[cpu]->cpu_postboot)
 		cpu_ops[cpu]->cpu_postboot();
+
+#ifdef CONFIG_HARDEN_BRANCH_PREDICTOR
+	if (sys_psci_bp_hardening_initialised)
+		enable_psci_bp_hardening(NULL);
+#endif
 
 	/*
 	 * Enable GIC and timers.
@@ -259,7 +269,7 @@ void __cpu_die(unsigned int cpu)
 		pr_crit("CPU%u: cpu didn't die\n", cpu);
 		return;
 	}
-	pr_debug("CPU%u: shutdown\n", cpu);
+	pr_notice("CPU%u: shutdown\n", cpu);
 
 	/*
 	 * Now that the dying CPU is beyond the point of no return w.r.t.
@@ -313,6 +323,7 @@ void __ref cpu_die(void)
 void __init smp_cpus_done(unsigned int max_cpus)
 {
 	pr_info("SMP: Total of %d processors activated.\n", num_online_cpus());
+	setup_cpu_features();
 }
 
 void __init smp_prepare_boot_cpu(void)
@@ -570,6 +581,9 @@ static void ipi_cpu_stop(unsigned int cpu, struct pt_regs *regs)
 		show_regs(regs);
 		dump_stack();
 		arm64_check_cache_ecc(NULL);
+#ifdef CONFIG_SEC_DEBUG
+		sec_debug_save_context();
+#endif
 		raw_spin_unlock(&stop_lock);
 	}
 

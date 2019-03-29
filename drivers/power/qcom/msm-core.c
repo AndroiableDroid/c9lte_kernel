@@ -402,8 +402,8 @@ static int update_userspace_power(struct sched_params __user *argp)
 	/* Copy the same power values for all the cpus in the cpumask
 	 * argp->cpumask within the cluster (argp->cluster)
 	 */
-	spin_lock(&update_lock);
 	get_user(cpumask, &argp->cpumask);
+	spin_lock(&update_lock);
 	for (i = 0; i < MAX_CORES_PER_CLUSTER; i++, cpumask >>= 1) {
 		if (!(cpumask & 0x01))
 			continue;
@@ -447,8 +447,7 @@ static long msm_core_ioctl(struct file *file, unsigned int cmd,
 	struct cpu_activity_info *node = NULL;
 	struct sched_params __user *argp = (struct sched_params __user *)arg;
 	int i, cpu = num_possible_cpus();
-	int mpidr;
-	int cluster, cpumask;
+	int mpidr, cluster, cpumask;
 
 	if (!argp)
 		return -EINVAL;

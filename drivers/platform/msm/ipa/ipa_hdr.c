@@ -635,7 +635,6 @@ static int __ipa_add_hdr_proc_ctx(struct ipa_hdr_proc_ctx_add *proc_ctx,
 	entry->ref_cnt++;
 
 	return 0;
-
 ipa_insert_failed:
 	if (offset)
 		list_move(&offset->link,
@@ -769,7 +768,7 @@ static int __ipa_add_hdr(struct ipa_hdr_add *hdr)
 	if (id < 0) {
 		IPAERR("failed to alloc id\n");
 		WARN_ON(1);
-		 goto ipa_insert_failed;
+		goto ipa_insert_failed;
 	}
 	entry->id = id;
 	hdr->hdr_hdl = id;

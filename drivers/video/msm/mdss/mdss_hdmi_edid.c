@@ -1725,11 +1725,11 @@ int hdmi_edid_parser(void *input)
 	}
 
 	/* Find out if CEA extension blocks exceeding max limit */
-	if (num_of_cea_blocks >= MAX_EDID_BLOCKS) {
-		DEV_WARN("%s: HDMI EDID exceeded max CEA blocks limit\n",
-				__func__);
-		num_of_cea_blocks = MAX_EDID_BLOCKS - 1;
-	}
+   	if (num_of_cea_blocks >= MAX_EDID_BLOCKS) {
+      		DEV_WARN("%s: HDMI EDID exceeded max CEA blocks limit\n",
+            		__func__);
+      		num_of_cea_blocks = MAX_EDID_BLOCKS - 1;
+   	}
 
 	/* check for valid CEA block */
 	if (edid_buf[EDID_BLOCK_SIZE] != 2) {

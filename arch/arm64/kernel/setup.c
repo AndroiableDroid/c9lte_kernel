@@ -49,6 +49,7 @@
 #include <asm/fixmap.h>
 #include <asm/cputype.h>
 #include <asm/elf.h>
+#include <asm/cpufeature.h>
 #include <asm/cputable.h>
 #include <asm/cpu_ops.h>
 #include <asm/sections.h>
@@ -61,8 +62,27 @@
 #include <asm/psci.h>
 #include <asm/efi.h>
 
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/qcom/sec_debug.h>
+#endif
+
+// [ SEC_SELINUX_PORTING_QUALCOMM
+#ifdef CONFIG_PROC_AVC
+#include <linux/proc_avc.h>
+#endif
+// ] SEC_SELINUX_PORTING_QUALCOMM
+
 unsigned int processor_id;
 EXPORT_SYMBOL(processor_id);
+
+unsigned int system_rev;
+EXPORT_SYMBOL(system_rev);
+
+unsigned int system_serial_low;
+EXPORT_SYMBOL(system_serial_low);
+
+unsigned int system_serial_high;
+EXPORT_SYMBOL(system_serial_high);
 
 unsigned long elf_hwcap __read_mostly;
 EXPORT_SYMBOL_GPL(elf_hwcap);
@@ -88,7 +108,10 @@ unsigned int compat_elf_hwcap2 __read_mostly;
 #endif
 
 static const char *cpu_name;
-static const char *machine_name;
+const char *machine_name;
+#ifdef CONFIG_HARDEN_BRANCH_PREDICTOR
+bool sys_psci_bp_hardening_initialised;
+#endif
 phys_addr_t __fdt_pointer __initdata;
 
 /*
@@ -208,27 +231,46 @@ static void __init smp_build_mpidr_hash(void)
 }
 #endif
 
-static void __init setup_processor(void)
+#ifdef CONFIG_HARDEN_BRANCH_PREDICTOR
+#include <asm/mmu_context.h>
+
+DEFINE_PER_CPU_READ_MOSTLY(struct bp_hardening_data, bp_hardening_data);
+
+static void __maybe_unused __install_bp_hardening_cb(bp_hardening_cb_t fn)
 {
-	struct cpu_info *cpu_info;
+	__this_cpu_write(bp_hardening_data.fn, fn);
+}
+
+static void __maybe_unused install_bp_hardening_cb(bp_hardening_cb_t fn)
+{
+	__install_bp_hardening_cb(fn);
+}
+
+void enable_psci_bp_hardening(void *data)
+{
+	switch(read_cpuid_part_number()) {
+	case ARM_CPU_PART_CORTEX_A57:
+	case ARM_CPU_PART_CORTEX_A72:
+		if (psci_ops.get_version)
+			install_bp_hardening_cb(
+				(bp_hardening_cb_t)psci_ops.get_version);
+		else
+			install_bp_hardening_cb(
+				(bp_hardening_cb_t)psci_apply_bp_hardening);		
+	}
+}
+#endif	/* CONFIG_HARDEN_BRANCH_PREDICTOR */
+
+void __init setup_cpu_features(void)
+{
 	u64 features, block;
 	u32 cwg;
 	int cls;
 
-	cpu_info = lookup_processor_type(read_cpuid_id());
-	if (!cpu_info) {
-		printk("CPU configuration botched (ID %08x), unable to continue.\n",
-		       read_cpuid_id());
-		while (1);
-	}
-
-	cpu_name = cpu_info->cpu_name;
-
-	printk("CPU: %s [%08x] revision %d\n",
-	       cpu_name, read_cpuid_id(), read_cpuid_id() & 15);
-
-	sprintf(init_utsname()->machine, ELF_PLATFORM);
-	elf_hwcap = 0;
+#ifdef CONFIG_HARDEN_BRANCH_PREDICTOR
+	on_each_cpu(enable_psci_bp_hardening, NULL, true);
+	sys_psci_bp_hardening_initialised = true;
+#endif
 
 	/*
 	 * Check for sane CTR_EL0.CWG value.
@@ -306,6 +348,25 @@ static void __init setup_processor(void)
 #endif
 }
 
+static void __init setup_processor(void)
+{
+	struct cpu_info *cpu_info;
+
+	cpu_info = lookup_processor_type(read_cpuid_id());
+	if (!cpu_info) {
+		printk("CPU configuration botched (ID %08x), unable to continue.\n",
+		       read_cpuid_id());
+		while (1);
+	}
+
+	cpu_name = cpu_info->cpu_name;
+
+	printk("CPU: %s [%08x] revision %d\n",
+	       cpu_name, read_cpuid_id(), read_cpuid_id() & 15);
+
+	sprintf(init_utsname()->machine, ELF_PLATFORM);
+}
+
 static void __init setup_machine_fdt(phys_addr_t dt_phys)
 {
 	if (!dt_phys || !early_init_dt_scan(phys_to_virt(dt_phys))) {
@@ -342,6 +403,30 @@ static int __init early_mem(char *p)
 	return 0;
 }
 early_param("mem", early_mem);
+
+static int __init msm_serialnr_setup(char *p)
+{
+#ifdef CONFIG_EXTEND_SERIAL_NUM_16
+	unsigned long long serial = 0;
+	serial = simple_strtoull(p, NULL, 16);
+	system_serial_high = serial>>32;
+	system_serial_low = serial & 0xFFFFFFFF;
+#else
+	system_serial_low = simple_strtoul(p, NULL, 16);
+	system_serial_high = (system_serial_low&0xFFFF0000)>>16;
+	system_serial_low = system_serial_low&0x0000FFFF;
+#endif
+	return 0;
+}
+early_param("androidboot.serialno", msm_serialnr_setup);
+
+static int __init msm_hw_rev_setup(char *p)
+{
+	system_rev = memparse(p, NULL);
+	printk("androidboot.revision %x", system_rev);
+	return 0;
+}
+early_param("androidboot.revision", msm_hw_rev_setup);
 
 static void __init request_standard_resources(void)
 {
@@ -429,6 +514,15 @@ void __init setup_arch(char **cmdline_p)
 
 static int __init arm64_device_init(void)
 {
+#ifdef CONFIG_SEC_DEBUG
+	sec_debug_init();
+#endif
+// [ SEC_SELINUX_PORTING_QUALCOMM
+#ifdef CONFIG_PROC_AVC
+	sec_avc_log_init();
+#endif
+// ] SEC_SELINUX_PORTING_QUALCOMM
+
 	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 	return 0;
 }
@@ -506,6 +600,9 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "Hardware\t: %s\n", machine_name);
 	else
 		seq_printf(m, "Hardware\t: %s\n", arch_read_hardware_id());
+	seq_printf(m, "Revision\t: %04x\n", system_rev);
+	seq_printf(m, "Serial\t\t: %08x%08x\n",
+		   system_serial_high, system_serial_low);
 
 	return 0;
 }

@@ -57,7 +57,7 @@
 		i2c2  = &i2c_2;
 		i2c4  = &i2c_4;
 		i2c6  = &i2c_6;
-		i2c8  = &i2c_8;
+		//i2c8  = &i2c_8;
 		qup10 = &test_pacman;
 	};
 
@@ -73,6 +73,27 @@
 	memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
+		ranges;
+
+		ramoops@99400000 {
+ 			linux,reserve-contiguous-region;
+ 		 	linux,reserve-region;
+ 			linux,remove-completely;
+ 			reg = <0x0 0x99400000 0x0 0x0100000>;
+ 			compatible = "ramoops";
+			record-size = <0x40000>;
+			console-size = <0x40000>;
+			ftrace-size = <0x40000>;
+			pmsg-size = <0x40000>;
+		};
+		
+		ss_plog@99000000 {
+			compatible = "ss_plog";
+			linux,reserve-contiguous-region;
+			linux,reserve-region;
+			linux,remove-completely;
+			reg = <0x0 0x99000000 0x0 0x00400000>;
+		};
 
 		other_ext_mem: other_ext_region@0 {
 			linux,reserve-contiguous-region;
@@ -1233,8 +1254,8 @@
 			<&dma_blsp2 7 32 0x20000020 0x20>;
 		dma-names = "tx", "rx";
 	};
-
-	i2c_8: i2c@7af8000 { /* BLSP2 QUP4 */
+/*
+	i2c_8: i2c@7af8000 {  BLSP2 QUP4 
                 compatible = "qcom,i2c-msm-v2";
                 #address-cells = <1>;
                 #size-cells = <0>;
@@ -1257,7 +1278,7 @@
                         <&dma_blsp2 11 32 0x20000020 0x20>;
                 dma-names = "tx", "rx";
         };
-
+*/
 
 	usb_otg: usb@78db000 {
 		compatible = "qcom,hsusb-otg";
@@ -1857,9 +1878,13 @@
 		clocks = <&clock_gcc clk_xo_wlan_clk>,
 			 <&clock_gcc clk_rf_clk2>,
 			 <&clock_debug clk_gcc_debug_mux>,
-			 <&clock_gcc clk_wcnss_m_clk>;
+			 <&clock_gcc clk_wcnss_m_clk>,
+			 <&clock_gcc clk_snoc_wcnss_a_clk>;
 
-		clock-names = "xo", "rf_clk", "measure", "wcnss_debug";
+		clock-names = "xo", "rf_clk", "measure", "wcnss_debug",
+			      "snoc_wcnss";
+
+		qcom,snoc-wcnss-clock-freq = <200000000>;
 
 		qcom,pc-disable-latency = <80>;
 		qcom,has-autodetect-xo;
