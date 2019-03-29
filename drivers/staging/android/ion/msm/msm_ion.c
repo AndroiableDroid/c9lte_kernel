@@ -286,7 +286,7 @@ int ion_do_cache_op(struct ion_client *client, struct ion_handle *handle,
 	if (!ION_IS_CACHED(flags))
 		return 0;
 
-	if (get_secure_vmid(flags) > 0)
+	if ((flags & ION_FLAG_SECURE) || (get_secure_vmid(flags) > 0))
 		return 0;
 
 	table = ion_sg_table(client, handle);
