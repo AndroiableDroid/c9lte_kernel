@@ -31,12 +31,15 @@
 #include <asm/arch_timer.h>
 #include <asm/cacheflush.h>
 #include <asm/exception.h>
+#include <asm/stacktrace.h>
 #include <asm/unistd.h>
 #include <asm/traps.h>
 #include <asm/unwind.h>
 #include <asm/tls.h>
 #include <asm/system_misc.h>
-
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/qcom/sec_debug.h>
+#endif
 #include <trace/events/exception.h>
 
 static const char *handler[]= {
@@ -73,6 +76,31 @@ void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long
 	if (in_exception_text(where))
 		dump_mem("", "Exception stack", frame + 4, frame + 4 + sizeof(struct pt_regs));
 }
+
+#ifdef CONFIG_USER_RESET_DEBUG
+void sec_debug_backtrace(void)
+{
+	static int once = 0;
+	struct stackframe frame;
+
+	if (!once++) {
+		frame.fp = (unsigned long)__builtin_frame_address(0);
+		frame.sp = current_stack_pointer;
+		frame.pc = (unsigned long)sec_debug_backtrace;
+
+		while (1) {
+			int ret;
+
+			ret = unwind_frame(&frame);
+			if (ret < 0)
+				break;
+
+			_sec_debug_store_backtrace(frame.pc);
+		}
+	}
+}
+EXPORT_SYMBOL(sec_debug_backtrace);
+#endif
 
 #ifndef CONFIG_ARM_UNWIND
 /*
@@ -252,14 +280,17 @@ static int __die(const char *str, int err, struct pt_regs *regs)
 	__show_regs(regs);
 	printk(KERN_EMERG "Process %.*s (pid: %d, stack limit = 0x%p)\n",
 		TASK_COMM_LEN, tsk->comm, task_pid_nr(tsk), end_of_stack(tsk));
-
+#ifndef CONFIG_SEC_DEBUG
+		dump_mem(KERN_EMERG, "Stack: ", regs->ARM_sp,
+			 THREAD_SIZE + (unsigned long)task_stack_page(tsk));
+#else
 	if (!user_mode(regs) || in_interrupt()) {
 		dump_mem(KERN_EMERG, "Stack: ", regs->ARM_sp,
 			 THREAD_SIZE + (unsigned long)task_stack_page(tsk));
 		dump_backtrace(regs, tsk);
 		dump_instr(KERN_EMERG, regs);
 	}
-
+#endif
 	return 0;
 }
 
@@ -321,12 +352,17 @@ void die(const char *str, struct pt_regs *regs, int err)
 	enum bug_trap_type bug_type = BUG_TRAP_TYPE_NONE;
 	unsigned long flags = oops_begin();
 	int sig = SIGSEGV;
-
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("!!die!!");
+#endif
 	if (!user_mode(regs))
 		bug_type = report_bug(regs->ARM_pc, regs);
 	if (bug_type != BUG_TRAP_TYPE_NONE)
 		str = "Oops - BUG";
 
+#ifdef CONFIG_SEC_DEBUG_SUMMARY
+         sec_debug_save_die_info(str, regs);
+#endif
 	if (__die(str, err, regs))
 		sig = 0;
 
@@ -734,12 +770,13 @@ late_initcall(arm_mrc_hook_init);
 
 #endif
 
-static int get_pct_trap(struct pt_regs *regs, unsigned int instr)
+static int get_timer_count_trap(struct pt_regs *regs, unsigned int instr)
 {
-	u64 cntpct;
+	u64 cval;
 	unsigned int res;
 	int rd = (instr >> 12) & 0xF;
 	int rn =  (instr >> 16) & 0xF;
+	int read_virtual = (instr >> 4) & 1;
 
 	res = arm_check_condition(instr, regs->ARM_cpsr);
 	if (res == ARM_OPCODE_CONDTEST_FAIL) {
@@ -749,26 +786,27 @@ static int get_pct_trap(struct pt_regs *regs, unsigned int instr)
 
 	if (rd == 15 || rn == 15)
 		return 1;
-	cntpct = arch_counter_get_cntpct();
-	regs->uregs[rd] = cntpct;
-	regs->uregs[rn] = cntpct >> 32;
+	cval = read_virtual ?
+		arch_counter_get_cntvct() : arch_counter_get_cntpct();
+	regs->uregs[rd] = cval;
+	regs->uregs[rn] = cval >> 32;
 	regs->ARM_pc += 4;
 	return 0;
 }
 
-static struct undef_hook get_pct_hook = {
-	.instr_mask	= 0x0ff00fff,
+static struct undef_hook get_timer_count_hook = {
+	.instr_mask	= 0x0ff00fef,
 	.instr_val	= 0x0c500f0e,
 	.cpsr_mask	= MODE_MASK,
 	.cpsr_val	= USR_MODE,
-	.fn		= get_pct_trap,
+	.fn		= get_timer_count_trap,
 };
 
-void get_pct_hook_init(void)
+void get_timer_count_hook_init(void)
 {
-	register_undef_hook(&get_pct_hook);
+	register_undef_hook(&get_timer_count_hook);
 }
-EXPORT_SYMBOL(get_pct_hook_init);
+EXPORT_SYMBOL(get_timer_count_hook_init);
 
 void __bad_xchg(volatile void *ptr, int size)
 {

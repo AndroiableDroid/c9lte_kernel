@@ -102,7 +102,7 @@ static struct mdss_panel_intf pan_types[] = {
 	{"edp", MDSS_PANEL_INTF_EDP},
 	{"hdmi", MDSS_PANEL_INTF_HDMI},
 };
-static char mdss_mdp_panel[MDSS_MAX_PANEL_LEN];
+char mdss_mdp_panel[MDSS_MAX_PANEL_LEN];
 
 struct mdss_iommu_map_type mdss_iommu_map[MDSS_IOMMU_MAX_DOMAIN] = {
 	[MDSS_IOMMU_DOMAIN_UNSECURE] = {
@@ -241,10 +241,14 @@ u32 mdss_mdp_fb_stride(u32 fb_index, u32 xres, int bpp)
 static irqreturn_t mdss_irq_handler(int irq, void *ptr)
 {
 	struct mdss_data_type *mdata = ptr;
-	u32 intr = MDSS_REG_READ(mdata, MDSS_REG_HW_INTR_STATUS);
+	u32 intr;
 
 	if (!mdata)
 		return IRQ_NONE;
+	else if (!mdss_get_irq_enable_state(&mdss_mdp_hw))
+		return IRQ_HANDLED;
+
+	intr = MDSS_REG_READ(mdata, MDSS_REG_HW_INTR_STATUS);
 
 	mdss_mdp_hw.irq_info->irq_buzy = true;
 
@@ -837,6 +841,8 @@ static int mdss_mdp_idle_pc_restore(void)
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	int rc = 0;
 
+	MDSS_XLOG(0x111);
+
 	mutex_lock(&mdp_fs_idle_pc_lock);
 	if (!mdata->idle_pc) {
 		pr_debug("no idle pc, no need to restore\n");
@@ -856,6 +862,9 @@ static int mdss_mdp_idle_pc_restore(void)
 
 end:
 	mutex_unlock(&mdp_fs_idle_pc_lock);
+
+	MDSS_XLOG(0x222);
+
 	return rc;
 }
 
@@ -1026,6 +1035,29 @@ static int mdss_mdp_gdsc_notifier_call(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
+static void __halt_vbif_xin(void) 
+{ 
+	struct mdss_data_type *mdata2 = mdss_mdp_get_mdata(); 
+	pr_err("Halting VBIF_IN\n"); 
+	MDSS_VBIF_WRITE(mdata2, MMSS_VBIF_AXI_HALT_CTRL0, 0xFFFFFFFF, false); 
+ 
+} 
+ 
+static void __dump_vbif_state(void) 
+{ 
+	struct mdss_data_type *mdata3 = mdss_mdp_get_mdata(); 
+	unsigned int reg_val; 
+ 
+	reg_val = MDSS_VBIF_READ(mdata3, MMSS_VBIF_XIN_HALT_CTRL0,false); 
+	pr_err("Value of VBIF_XIN_HALT_CTRL0 = 0x%x\n", reg_val); 
+	reg_val = MDSS_VBIF_READ(mdata3, MMSS_VBIF_XIN_HALT_CTRL1,false); 
+	pr_err("Value of VBIF_XIN_HALT_CTRL1 = 0x%x\n", reg_val); 
+	reg_val = MDSS_VBIF_READ(mdata3, MMSS_VBIF_AXI_HALT_CTRL0,false); 
+	pr_err("Value of VBIF_AXI_HALT_CTRL0 = 0x%x\n", reg_val); 
+	reg_val = MDSS_VBIF_READ(mdata3, MMSS_VBIF_AXI_HALT_CTRL1,false); 
+	pr_err("Value of VBIF_AXI_HALT_CTRL1 = 0x%x\n", reg_val); 
+} 
+
 static int mdss_iommu_tlb_timeout_notify(struct notifier_block *self,
 		unsigned long action, void *dev)
 {
@@ -1036,13 +1068,21 @@ static int mdss_iommu_tlb_timeout_notify(struct notifier_block *self,
 
 	if (strcmp(client_name, "mdp_ns") && strcmp(client_name, "mdp_secure"))
 		return 0;
-
+	
+	pr_err("mdss tlb timeout notifier: client name is %s", client_name);
+	
 	switch (action) {
 	case TLB_SYNC_TIMEOUT:
-		pr_err("cb for TLB SYNC timeout. Dumping XLOG's\n");
-		MDSS_XLOG_TOUT_HANDLER_FATAL_DUMP("vbif", "mdp",
-					"mdp_dbg_bus", "atomic_context");
-		break;
+			pr_err("cb for TLB SYNC timeout. Dumping XLOG's\n");
+			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+			__dump_vbif_state();
+			__halt_vbif_xin();
+			usleep(20000);
+			__dump_vbif_state();
+			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+			MDSS_XLOG_TOUT_HANDLER_FATAL_DUMP("vbif", "mdp",
+			"mdp_dbg_bus", "atomic_context");
+			break;
 	}
 
 	return 0;
@@ -3792,6 +3832,8 @@ static void mdss_mdp_footswitch_ctrl(struct mdss_data_type *mdata, int on)
 	int active_cnt = 0;
 	bool disable_cx = false;
 
+	MDSS_XLOG(on, 0x111);
+
 	if (!mdata->fs)
 		return;
 
@@ -3838,6 +3880,7 @@ static void mdss_mdp_footswitch_ctrl(struct mdss_data_type *mdata, int on)
 		}
 		mdata->fs_ena = false;
 	}
+	MDSS_XLOG(on, 0x222);
 }
 
 int mdss_mdp_secure_display_ctrl(unsigned int enable)
@@ -3872,6 +3915,7 @@ int mdss_mdp_secure_display_ctrl(unsigned int enable)
 static inline int mdss_mdp_suspend_sub(struct mdss_data_type *mdata)
 {
 	mdata->suspend_fs_ena = mdata->fs_ena;
+	MDSS_XLOG(mdata->fs_ena, false);
 	mdss_mdp_footswitch_ctrl(mdata, false);
 
 	pr_debug("suspend done fs=%d\n", mdata->suspend_fs_ena);
@@ -3881,6 +3925,7 @@ static inline int mdss_mdp_suspend_sub(struct mdss_data_type *mdata)
 
 static inline int mdss_mdp_resume_sub(struct mdss_data_type *mdata)
 {
+	MDSS_XLOG(mdata->fs_ena, true);
 	if (mdata->suspend_fs_ena)
 		mdss_mdp_footswitch_ctrl(mdata, true);
 
@@ -3969,6 +4014,7 @@ static int mdss_mdp_runtime_resume(struct device *dev)
 	/* do not resume panels when coming out of idle power collapse */
 	if (!mdata->idle_pc)
 		device_for_each_child(dev, &device_on, mdss_fb_suspres_panel);
+	MDSS_XLOG(true);
 	mdss_mdp_footswitch_ctrl(mdata, true);
 
 	return 0;
@@ -4042,6 +4088,7 @@ static int mdss_mdp_runtime_suspend(struct device *dev)
 		return -EBUSY;
 	}
 
+	MDSS_XLOG(false);
 	mdss_mdp_footswitch_ctrl(mdata, false);
 	/* do not suspend panels when going in to idle power collapse */
 	if (!mdata->idle_pc)

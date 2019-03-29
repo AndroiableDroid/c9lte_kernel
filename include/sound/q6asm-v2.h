@@ -166,16 +166,6 @@ struct audio_port_data {
 	spinlock_t	    dsp_lock;
 };
 
-struct shared_io_config {
-	uint32_t format;
-	uint16_t bits_per_sample;
-	uint32_t rate;
-	uint32_t channels;
-	uint16_t sample_word_size;
-	uint32_t bufsz;
-	uint32_t bufcnt;
-};
-
 struct audio_client {
 	int                    session;
 	app_cb		       cb;
@@ -207,9 +197,6 @@ struct audio_client {
 	atomic_t               reset;
 	/* holds latest DSP pipeline delay */
 	uint32_t               path_delay;
-	/* shared io */
-	struct audio_buffer shared_pos_buf;
-	struct shared_io_config config;
 };
 
 void q6asm_audio_client_free(struct audio_client *ac);
@@ -237,27 +224,15 @@ int q6asm_open_read(struct audio_client *ac, uint32_t format
 int q6asm_open_read_v2(struct audio_client *ac, uint32_t format,
 			uint16_t bits_per_sample);
 
-int q6asm_open_read_v3(struct audio_client *ac, uint32_t format,
-		       uint16_t bits_per_sample);
-
 int q6asm_open_write(struct audio_client *ac, uint32_t format
 		/*, uint16_t bits_per_sample*/);
 
 int q6asm_open_write_v2(struct audio_client *ac, uint32_t format,
 			uint16_t bits_per_sample);
 
-int q6asm_open_shared_io(struct audio_client *ac,
-			 struct shared_io_config *c, int dir);
-int q6asm_open_write_v3(struct audio_client *ac, uint32_t format,
-			uint16_t bits_per_sample);
-
 int q6asm_stream_open_write_v2(struct audio_client *ac, uint32_t format,
-			       uint16_t bits_per_sample, int32_t stream_id,
-			       bool is_gapless_mode);
-
-int q6asm_stream_open_write_v3(struct audio_client *ac, uint32_t format,
-			       uint16_t bits_per_sample, int32_t stream_id,
-			       bool is_gapless_mode);
+				uint16_t bits_per_sample, int32_t stream_id,
+				bool is_gapless_mode);
 
 int q6asm_open_write_compressed(struct audio_client *ac, uint32_t format,
 				uint32_t passthrough_flag);
@@ -294,13 +269,6 @@ int q6asm_memory_map(struct audio_client *ac, phys_addr_t buf_add,
 
 int q6asm_memory_unmap(struct audio_client *ac, phys_addr_t buf_add,
 							int dir);
-
-struct audio_buffer *q6asm_shared_io_buf(struct audio_client *ac, int dir);
-
-int q6asm_shared_io_free(struct audio_client *ac, int dir);
-
-int q6asm_get_shared_pos(struct audio_client *ac, uint32_t *si, uint32_t *msw,
-			 uint32_t *lsw);
 
 int q6asm_map_rtac_block(struct rtac_cal_block_data *cal_block);
 
@@ -353,20 +321,9 @@ int q6asm_enc_cfg_blk_pcm_v2(struct audio_client *ac,
 			bool use_default_chmap, bool use_back_flavor,
 			u8 *channel_map);
 
-int q6asm_enc_cfg_blk_pcm_v3(struct audio_client *ac,
-			     uint32_t rate, uint32_t channels,
-			     uint16_t bits_per_sample, bool use_default_chmap,
-			     bool use_back_flavor, u8 *channel_map,
-			     uint16_t sample_word_size);
-
 int q6asm_enc_cfg_blk_pcm_format_support(struct audio_client *ac,
 			uint32_t rate, uint32_t channels,
 			uint16_t bits_per_sample);
-
-int q6asm_enc_cfg_blk_pcm_format_support_v3(struct audio_client *ac,
-					    uint32_t rate, uint32_t channels,
-					    uint16_t bits_per_sample,
-					    uint16_t sample_word_size);
 
 int q6asm_set_encdec_chan_map(struct audio_client *ac,
 		uint32_t num_channels);
@@ -408,15 +365,6 @@ int q6asm_media_format_block_pcm_format_support_v2(struct audio_client *ac,
 				uint16_t bits_per_sample, int stream_id,
 				bool use_default_chmap, char *channel_map);
 
-int q6asm_media_format_block_pcm_format_support_v3(struct audio_client *ac,
-						   uint32_t rate,
-						   uint32_t channels,
-						   uint16_t bits_per_sample,
-						   int stream_id,
-						   bool use_default_chmap,
-						   char *channel_map,
-						   uint16_t sample_word_size);
-
 int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
 			uint32_t rate, uint32_t channels,
 			bool use_default_chmap, char *channel_map);
@@ -426,13 +374,6 @@ int q6asm_media_format_block_multi_ch_pcm_v2(
 			uint32_t rate, uint32_t channels,
 			bool use_default_chmap, char *channel_map,
 			uint16_t bits_per_sample);
-
-int q6asm_media_format_block_multi_ch_pcm_v3(struct audio_client *ac,
-					     uint32_t rate, uint32_t channels,
-					     bool use_default_chmap,
-					     char *channel_map,
-					     uint16_t bits_per_sample,
-					     uint16_t sample_word_size);
 
 int q6asm_media_format_block_aac(struct audio_client *ac,
 			struct asm_aac_cfg *cfg);
@@ -545,4 +486,11 @@ int q6asm_send_mtmx_strtr_window(struct audio_client *ac,
 /* Retrieve the current DSP path delay */
 int q6asm_get_path_delay(struct audio_client *ac);
 
+#ifdef CONFIG_SEC_SND_SOLUTION
+int q6asm_set_sa(struct audio_client *ac, long *param);
+int q6asm_set_vsp(struct audio_client *ac, long *param);
+int q6asm_set_dha(struct audio_client *ac, long *param);
+int q6asm_set_lrsm(struct audio_client *ac, long *param);
+int q6asm_set_msp(struct audio_client *ac, long *param);
+#endif /* CONFIG_SEC_SND_SOLUTION */
 #endif /* __Q6_ASM_H__ */

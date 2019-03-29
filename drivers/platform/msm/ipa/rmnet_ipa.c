@@ -1371,6 +1371,7 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 				sizeof(mux_channel[rmnet_index].vchannel_name));
 			mux_channel[rmnet_index].vchannel_name[
 				IFNAMSIZ - 1] = '\0';
+
 			IPAWANDBG("cashe device[%s:%d] in IPA_wan[%d]\n",
 				mux_channel[rmnet_index].vchannel_name,
 				mux_channel[rmnet_index].mux_id,
@@ -2804,6 +2805,8 @@ static int __init ipa_wwan_init(void)
 	mutex_init(&add_mux_channel_lock);
 
 	ipa_qmi_init();
+	
+	mutex_init(&add_mux_channel_lock);
 
 	/* Register for Modem SSR */
 	subsys_notify_handle = subsys_notif_register_notifier(SUBSYS_MODEM,
@@ -2827,6 +2830,7 @@ static void __exit ipa_wwan_cleanup(void)
 		"Error subsys_notif_unregister_notifier system %s, ret=%d\n",
 		SUBSYS_MODEM, ret);
 
+	mutex_destroy(&add_mux_channel_lock);
 	platform_driver_unregister(&rmnet_ipa_driver);
 }
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -828,7 +828,7 @@ static void dci_process_ctrl_status(unsigned char *buf, int len, int token)
 	read_len += sizeof(struct diag_ctrl_dci_status);
 
 	for (i = 0; i < header->count; i++) {
-		if (read_len > len) {
+		if (read_len > (len - 2)) {
 			pr_err("diag: In %s, Invalid length len: %d\n",
 			       __func__, len);
 			return;
@@ -2958,10 +2958,16 @@ int diag_dci_write_proc(uint8_t peripheral, int pkt_type, char *buf, int len)
 
 	if (!buf || peripheral >= NUM_PERIPHERALS || len < 0 ||
 	    !(driver->feature[PERIPHERAL_MODEM].rcvd_feature_mask)) {
-		DIAG_LOG(DIAG_DEBUG_DCI,
-			"buf: 0x%pK, p: %d, len: %d, f_mask: %d\n",
-				buf, peripheral, len,
-				driver->feature[peripheral].rcvd_feature_mask);
+		if(peripheral >= NUM_PERIPHERALS)  {
+			DIAG_LOG(DIAG_DEBUG_DCI,
+				"buf: 0x%pK, p: %d, len: %d \n",
+					buf, peripheral, len);
+		} else {
+			DIAG_LOG(DIAG_DEBUG_DCI,
+				"buf: 0x%pK, p: %d, len: %d, f_mask: %d\n",
+					buf, peripheral, len,
+					driver->feature[peripheral].rcvd_feature_mask);
+		}
 		return -EINVAL;
 	}
 

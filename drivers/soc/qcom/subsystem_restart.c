@@ -37,6 +37,9 @@
 #include <soc/qcom/subsystem_notif.h>
 #include <soc/qcom/socinfo.h>
 #include <soc/qcom/sysmon.h>
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/qcom/sec_debug.h>
+#endif
 
 #include <asm/current.h>
 
@@ -50,8 +53,10 @@ module_param(disable_restart_work, uint, S_IRUGO | S_IWUSR);
 static int enable_debug;
 module_param(enable_debug, int, S_IRUGO | S_IWUSR);
 
-/* The maximum shutdown timeout is the product of MAX_LOOPS and DELAY_MS. */
-#define SHUTDOWN_ACK_MAX_LOOPS	100
+static bool silent_ssr;
+static int sys_shutdown_status;
+
+#define SHUTDOWN_ACK_MAX_LOOPS	20
 #define SHUTDOWN_ACK_DELAY_MS	100
 
 /**
@@ -160,7 +165,11 @@ struct subsys_device {
 	struct work_struct work;
 	struct wakeup_source ssr_wlock;
 	char wlname[64];
+#ifdef CONFIG_SEC_DEBUG
+	struct delayed_work device_restart_delayed_work;
+#else
 	struct work_struct device_restart_work;
+#endif
 	struct subsys_tracking track;
 
 	void *notify;
@@ -674,6 +683,9 @@ static int subsys_start(struct subsys_device *subsys)
 {
 	int ret;
 
+	/* to check subsystem shutdown */
+	sys_shutdown_status = 0;
+
 	notify_each_subsys_device(&subsys, 1, SUBSYS_BEFORE_POWERUP,
 								NULL);
 
@@ -717,6 +729,9 @@ static void subsys_stop(struct subsys_device *subsys)
 	if (!of_property_read_bool(subsys->desc->dev->of_node,
 					"qcom,pil-force-shutdown")) {
 		subsys_set_state(subsys, SUBSYS_OFFLINING);
+		/* to check subsystem shutdown */
+		sys_shutdown_status = 1;
+
 		subsys->desc->sysmon_shutdown_ret =
 				sysmon_send_shutdown(subsys->desc);
 		if (subsys->desc->sysmon_shutdown_ret)
@@ -728,6 +743,9 @@ static void subsys_stop(struct subsys_device *subsys)
 	subsys_set_state(subsys, SUBSYS_OFFLINE);
 	disable_all_irqs(subsys);
 	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_SHUTDOWN, NULL);
+
+	/* subsystem shutdown complete */
+	sys_shutdown_status = 0;
 }
 
 void *__subsystem_get(const char *name, const char *fw_name)
@@ -834,10 +852,23 @@ void subsystem_put(void *subsystem)
 			subsys->desc->name, __func__))
 		goto err_out;
 	if (!--subsys->count) {
+#if 0	/* CONFIG_SEC_DEBUG is disabled for subsystem_get() of modem after platform shutdown */
+		if (strncmp(subsys->desc->name, "modem", 5)) {
+			subsys_stop(subsys);
+			if (subsys->do_ramdump_on_put)
+				subsystem_ramdump(subsys, NULL);
+			subsystem_free_memory(subsys, NULL);
+		}
+		else {
+			pr_err("subsys: block modem put stop for stabilty\n");
+			subsys->count++;
+		}
+#else
 		subsys_stop(subsys);
 		if (subsys->do_ramdump_on_put)
 			subsystem_ramdump(subsys, NULL);
 		subsystem_free_memory(subsys, NULL);
+#endif
 	}
 	mutex_unlock(&track->lock);
 
@@ -963,9 +994,14 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 
 static void device_restart_work_hdlr(struct work_struct *work)
 {
+#ifdef CONFIG_SEC_DEBUG
+	struct subsys_device *dev = container_of(to_delayed_work(work),
+						struct subsys_device,
+						device_restart_delayed_work);
+#else
 	struct subsys_device *dev = container_of(work, struct subsys_device,
 							device_restart_work);
-
+#endif
 	notify_each_subsys_device(&dev, 1, SUBSYS_SOC_RESET, NULL);
 	/*
 	 * Temporary workaround until ramdump userspace application calls
@@ -989,6 +1025,24 @@ int subsystem_restart_dev(struct subsys_device *dev)
 	}
 
 	name = dev->desc->name;
+
+#ifdef CONFIG_SEC_DEBUG
+#ifdef CONFIG_SEC_SSR_DEBUG_LEVEL_CHK
+	if ((!sec_debug_is_enabled_for_ssr()) || (!sec_debug_is_enabled()) || silent_ssr)
+#else
+	if (!sec_debug_is_enabled() || silent_ssr)
+#endif
+		dev->restart_level = RESET_SUBSYS_COUPLED; //Why is it delete the RESET_SUBSYS_INDEPENDENT on MSM8974 ?
+	else
+		dev->restart_level = RESET_SOC;
+#endif
+	/* move from subsystem_crash(), clear force stop gpio and silent ssr flag */
+	if (dev->desc->force_stop_gpio) {
+		gpio_set_value(dev->desc->force_stop_gpio, 0);
+
+		subsys_set_reset_reason(name, 0);
+	}
+	silent_ssr = 0;
 
 	/*
 	 * If a system reboot/shutdown is underway, ignore subsystem errors.
@@ -1017,7 +1071,27 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		break;
 	case RESET_SOC:
 		__pm_stay_awake(&dev->ssr_wlock);
+#ifdef CONFIG_SEC_DEBUG
+		/*
+		 * If the silent log function is enabled for CP and CP is in
+		 * trouble, diag_mdlog (APP) should be terminated before
+		 * a panic occurs, since it can flush logs to SD card
+		 * when it is over.
+		 * We should guarantee time the App needs for saving logs
+		 * as well, so we use a delayed workqueue.
+		 */
+#if defined(CONFIG_DIAG_CHAR)
+		if(silent_log_panic_handler())
+			schedule_delayed_work(&dev->device_restart_delayed_work,
+				msecs_to_jiffies(300));
+		else
+#endif
+			schedule_delayed_work(&dev->device_restart_delayed_work,
+				0);
+
+#else
 		schedule_work(&dev->device_restart_work);
+#endif
 		return 0;
 	default:
 		panic("subsys-restart: Unknown restart level!\n");
@@ -1043,6 +1117,69 @@ int subsystem_restart(const char *name)
 	return ret;
 }
 EXPORT_SYMBOL(subsystem_restart);
+
+int subsystem_crash(const char *name)
+{
+	struct subsys_device *dev = find_subsys(name);
+
+	if (!dev)
+		return -ENODEV;
+
+	if (!get_device(&dev->dev))
+		return -ENODEV;
+
+	if (!subsys_get_crash_status(dev) && dev->desc->force_stop_gpio) {
+		pr_err("%s: set force gpio\n", __func__);
+		gpio_set_value(dev->desc->force_stop_gpio, 1);
+		/*
+		 * wait for ack timeout is 1s. don't wait here.
+		 * with 10ms delay, sometimes stop_ack are not received.
+		 * so, clear gpio status when subsystem restart begins.
+		mdelay(10);
+		gpio_set_value(dev->desc->force_stop_gpio, 0);
+		*/
+	}
+	return 0;
+}
+EXPORT_SYMBOL(subsystem_crash);
+
+void subsys_set_reset_reason(const char *name, int val)
+{
+	struct subsys_device *dev = find_subsys(name);
+
+	if (!dev || !dev->desc)
+		return;
+
+	if (dev->desc->stop_reason_0_gpio &&
+	    dev->desc->stop_reason_1_gpio) {
+		pr_err("set restart reason gpios.. to 0x%x\n", val);
+		if (val == 0x10) {
+			gpio_set_value(dev->desc->stop_reason_0_gpio, 1);
+			gpio_set_value(dev->desc->stop_reason_1_gpio, 0);
+		} else if (val == 0x20) {
+			gpio_set_value(dev->desc->stop_reason_0_gpio, 0);
+			gpio_set_value(dev->desc->stop_reason_1_gpio, 1);
+		} else {
+			gpio_set_value(dev->desc->stop_reason_0_gpio, 0);
+			gpio_set_value(dev->desc->stop_reason_1_gpio, 0);
+		}
+	}
+}
+
+void subsys_force_stop(const char *name, bool val)
+{
+	silent_ssr = val;
+	pr_err("silent_ssr %s: %d\n", name, silent_ssr);
+	subsys_set_reset_reason(name, val ? 0x20 : 0x10);
+	subsystem_crash(name);
+}
+EXPORT_SYMBOL(subsys_force_stop);
+
+int subsys_shutdown_check(void)
+{
+	return sys_shutdown_status;
+}
+EXPORT_SYMBOL(subsys_shutdown_check);
 
 int subsystem_crashed(const char *name)
 {
@@ -1389,6 +1526,16 @@ static int subsys_parse_devicetree(struct subsys_desc *desc)
 	if (ret && ret != -ENOENT)
 		return ret;
 
+	ret = __get_gpio(desc, "qcom,gpio-stop-reason-0",
+						&desc->stop_reason_0_gpio);
+	if (ret && ret != -ENOENT)
+		return ret;
+
+	ret = __get_gpio(desc, "qcom,gpio-stop-reason-1",
+						&desc->stop_reason_1_gpio);
+	if (ret && ret != -ENOENT)
+		return ret;
+
 	ret = __get_gpio(desc, "qcom,gpio-ramdump-disable",
 			&desc->ramdump_disable_gpio);
 	if (ret && ret != -ENOENT)
@@ -1511,7 +1658,12 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	snprintf(subsys->wlname, sizeof(subsys->wlname), "ssr(%s)", desc->name);
 	wakeup_source_init(&subsys->ssr_wlock, subsys->wlname);
 	INIT_WORK(&subsys->work, subsystem_restart_wq_func);
+#ifdef CONFIG_SEC_DEBUG
+	INIT_DELAYED_WORK(&subsys->device_restart_delayed_work,
+				device_restart_work_hdlr);
+#else
 	INIT_WORK(&subsys->device_restart_work, device_restart_work_hdlr);
+#endif
 	spin_lock_init(&subsys->track.s_lock);
 
 	subsys->id = ida_simple_get(&subsys_ida, 0, 0, GFP_KERNEL);

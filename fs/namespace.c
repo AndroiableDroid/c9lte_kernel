@@ -188,7 +188,11 @@ static struct mount *alloc_vfsmnt(const char *name)
 		mnt->mnt_count = 1;
 		mnt->mnt_writers = 0;
 #endif
+#ifdef CONFIG_RKP_NS_PROT
+		mnt->mnt->data = NULL;
+#else
 		mnt->mnt.data = NULL;
+#endif
 
 		INIT_LIST_HEAD(&mnt->mnt_hash);
 		INIT_LIST_HEAD(&mnt->mnt_child);
@@ -542,7 +546,11 @@ int sb_prepare_remount_readonly(struct super_block *sb)
 
 static void free_vfsmnt(struct mount *mnt)
 {
+#ifdef CONFIG_RKP_NS_PROT
+	kfree(mnt->mnt->data);
+#else
 	kfree(mnt->mnt.data);
+#endif
 	kfree(mnt->mnt_devname);
 	mnt_free_id(mnt);
 #ifdef CONFIG_SMP
@@ -787,9 +795,13 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 		return ERR_PTR(-ENOMEM);
 
 	if (type->alloc_mnt_data) {
+#ifdef CONFIG_RKP_NS_PROT
+		mnt->mnt->data = type->alloc_mnt_data();
+		if (!mnt->mnt->data) {
+#else
 		mnt->mnt.data = type->alloc_mnt_data();
 		if (!mnt->mnt.data) {
-			mnt_free_id(mnt);
+#endif
 			free_vfsmnt(mnt);
 			return ERR_PTR(-ENOMEM);
 		}
@@ -797,7 +809,11 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	if (flags & MS_KERNMOUNT)
 		mnt->mnt.mnt_flags = MNT_INTERNAL;
 
+#ifdef CONFIG_RKP_NS_PROT
+	root = mount_fs(type, flags, name, mnt->mnt, data);
+#else
 	root = mount_fs(type, flags, name, &mnt->mnt, data);
+#endif
 	if (IS_ERR(root)) {
 		free_vfsmnt(mnt);
 		return ERR_CAST(root);
@@ -1461,8 +1477,11 @@ struct vfsmount *collect_mounts(struct path *path)
 {
 	struct mount *tree;
 	namespace_lock();
-	tree = copy_tree(real_mount(path->mnt), path->dentry,
-			 CL_COPY_ALL | CL_PRIVATE);
+	if (!check_mnt(real_mount(path->mnt)))
+		tree = ERR_PTR(-EINVAL);
+	else
+		tree = copy_tree(real_mount(path->mnt), path->dentry,
+				CL_COPY_ALL | CL_PRIVATE);
 	namespace_unlock();
 	if (IS_ERR(tree))
 		return ERR_CAST(tree);

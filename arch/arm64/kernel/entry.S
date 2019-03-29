@@ -202,7 +202,7 @@ END(vectors)
  * Invalid mode handlers
  */
 	.macro	inv_entry, el, reason, regsize = 64
-	kernel_entry el, \regsize
+	kernel_entry \el, \regsize
 	mov	x0, sp
 	mov	x1, #\reason
 	mrs	x2, esr_el1
@@ -368,7 +368,7 @@ el0_sync:
 	lsr	x24, x25, #ESR_EL1_EC_SHIFT	// exception class
 	cmp	x24, #ESR_EL1_EC_SVC64		// SVC in 64-bit state
 	b.eq	el0_svc
-	adr	lr, ret_to_user
+//	adr	lr, ret_to_user
 	cmp	x24, #ESR_EL1_EC_DABT_EL0	// data abort in EL0
 	b.eq	el0_da
 	cmp	x24, #ESR_EL1_EC_IABT_EL0	// instruction abort in EL0
@@ -378,7 +378,7 @@ el0_sync:
 	cmp	x24, #ESR_EL1_EC_FP_EXC64	// FP/ASIMD exception
 	b.eq	el0_fpsimd_exc
 	cmp	x24, #ESR_EL1_EC_SYS64		// configurable trap
-	b.eq	el0_undef
+	b.eq	el0_sys
 	cmp	x24, #ESR_EL1_EC_SP_ALIGN	// stack alignment exception
 	b.eq	el0_sp_pc
 	cmp	x24, #ESR_EL1_EC_PC_ALIGN	// pc alignment exception
@@ -397,7 +397,7 @@ el0_sync_compat:
 	lsr	x24, x25, #ESR_EL1_EC_SHIFT	// exception class
 	cmp	x24, #ESR_EL1_EC_SVC32		// SVC in 32-bit state
 	b.eq	el0_svc_compat
-	adr	lr, ret_to_user
+//	adr	lr, ret_to_user
 	cmp	x24, #ESR_EL1_EC_DABT_EL0	// data abort in EL0
 	b.eq	el0_da
 	cmp	x24, #ESR_EL1_EC_IABT_EL0	// instruction abort in EL0
@@ -440,23 +440,31 @@ el0_da:
 	/*
 	 * Data abort handling
 	 */
-	mrs	x0, far_el1
-	bic	x0, x0, #(0xff << 56)
+//	mrs	x0, far_el1
+//	bic	x0, x0, #(0xff << 56)
+	mrs	x26, far_el1
 	// enable interrupts before calling the main handler
 	enable_dbg_and_irq
+	bic	x0, x26, #(0xff << 56)
 	mov	x1, x25
 	mov	x2, sp
+	adr     lr, ret_to_user
 	b	do_mem_abort
 el0_ia:
 	/*
 	 * Instruction abort handling
 	 */
-	mrs	x0, far_el1
-	// enable interrupts before calling the main handler
-	enable_dbg_and_irq
+//	mrs	x0, far_el1
+	mrs	x26, far_el1
+	enable_dbg
+#ifdef CONFIG_TRACE_IRQFLAGS
+	bl	trace_hardirqs_off
+#endif
+	mov	x0, x26
 	orr	x1, x25, #1 << 24		// use reserved ISS bit for instruction aborts
 	mov	x2, sp
-	b	do_mem_abort
+	adr     lr, ret_to_user
+	b	do_el0_ia_bp_hardening
 el0_fpsimd_acc:
 	/*
 	 * Floating Point or Advanced SIMD access
@@ -464,6 +472,7 @@ el0_fpsimd_acc:
 	enable_dbg
 	mov	x0, x25
 	mov	x1, sp
+	adr	lr, ret_to_user
 	b	do_fpsimd_acc
 el0_fpsimd_exc:
 	/*
@@ -472,16 +481,20 @@ el0_fpsimd_exc:
 	enable_dbg
 	mov	x0, x25
 	mov	x1, sp
+	adr	lr, ret_to_user
 	b	do_fpsimd_exc
 el0_sp_pc:
 	/*
 	 * Stack or PC alignment exception handling
 	 */
-	mrs	x0, far_el1
+//	mrs	x0, far_el1
+	mrs	x26, far_el1
 	// enable interrupts before calling the main handler
 	enable_dbg_and_irq
+	mov	x0, x26
 	mov	x1, x25
 	mov	x2, sp
+	adr	lr, ret_to_user
 	b	do_sp_pc_abort
 el0_undef:
 	/*
@@ -490,7 +503,18 @@ el0_undef:
 	// enable interrupts before calling the main handler
 	enable_dbg_and_irq
 	mov	x0, sp
+	adr     lr, ret_to_user
 	b	do_undefinstr
+el0_sys:
+	/*
+	 * System instructions, for trapped cache maintenance instructions
+	 */
+	enable_dbg
+	enable_irq
+	mov	x0, x25
+	mov	x1, sp
+	adr     lr, ret_to_user
+	b	do_sysinstr
 el0_dbg:
 	/*
 	 * Debug exception handling
@@ -507,6 +531,7 @@ el0_inv:
 	mov	x0, sp
 	mov	x1, #BAD_SYNC
 	mrs	x2, esr_el1
+	adr	lr, ret_to_user
 	b	bad_mode
 ENDPROC(el0_sync)
 
